@@ -2,12 +2,11 @@ import subprocess
 
 class MacController:
     def __init__(self):
-        # [COMMAND PATTERN] Реестр команд. 
-        # Добавление новой возможности теперь требует только добавления записи сюда.
         self._commands = {
             "open_app": self._open_app_smart,
             "set_volume": self._set_volume,
-            "open_website": self._open_url
+            "open_website": self._open_url,
+            "error": self._handle_error 
         }
 
     def run(self, command_data: dict) -> str:
@@ -62,3 +61,7 @@ class MacController:
 
         subprocess.run(["open", url])
         return f"Открываю {url}"
+        
+    def _handle_error(self, arg):
+        # Это заглушка, чтобы Джарвис не пытался выполнять "not_a_command"
+        return "В командном режиме я не веду диалоги, сэр. Только приказы."    
