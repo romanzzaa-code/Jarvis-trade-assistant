@@ -1,0 +1,20 @@
+# Скомпилированные файлы Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Системные файлы macOS
+.DS_Store
+
+# Виртуальное окружение (если есть)
+venv/
+env/
+.env
+
+# Временные аудиофайлы
+command_buffer.wav
+response.wav
+
+# Ключи и секреты (САМОЕ ВАЖНОЕ)
+config.py
+jarvis_sample.wav
