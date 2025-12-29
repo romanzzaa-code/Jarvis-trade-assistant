@@ -1,14 +1,14 @@
-import ollama
 import json
 import re
 import random
-from core.interfaces import ToolExecutor
+from core.interfaces import ToolExecutor, LLMProvider # Добавляем LLMProvider
 
 class Brain:
-    def __init__(self, tool_executor: ToolExecutor):
+    # Внедряем зависимость llm_provider через конструктор
+    def __init__(self, llm_provider: LLMProvider, tool_executor: ToolExecutor):
+        self.llm = llm_provider  # Теперь мозг использует абстракцию
         self.tool_executor = tool_executor
         
-        # Фразы-ответы (триггерят звук 'ok' в tts.py)
         self.ack_phrases = [
             "Выполняю, сэр.",
             "Слушаюсь, сэр.",
@@ -18,7 +18,6 @@ class Brain:
             "Сделано, сэр."
         ]
         
-        # [UPDATED] Усиленный промпт для исправления ошибок распознавания
         self.system_prompt = {
             'role': 'system', 
             'content': """
@@ -26,21 +25,9 @@ class Brain:
             ТВОЯ ЦЕЛЬ: Управлять компьютером через JSON.
             
             ПРАВИЛА ИСПРАВЛЕНИЯ ОШИБОК РАСПОЗНАВАНИЯ:
-            Пользователь может говорить нечетко, ты должен догадаться.
-            
-            1. BYBIT (Криптобиржа):
-               Если слышишь: "байбит", "babbit", "bubit", "bibit", "babik", "buy bit"
-               -> ОТВЕЧАЙ: { "tool": "open_website", "args": "bybit.com" }
-               
-            2. ДРУГИЕ САЙТЫ:
-               - "ютуб" -> youtube.com
-               - "вк" -> vk.com
-               - "телеграм" -> web.telegram.org
-            
-            3. ПРИЛОЖЕНИЯ:
-               - "калькулятор" -> Calculator
-               - "сафари" -> Safari
-               - "терминал" -> Terminal
+            1. BYBIT: "байбит", "babbit" -> { "tool": "open_website", "args": "bybit.com" }
+            2. САЙТЫ: "ютуб" -> youtube.com, "вк" -> vk.com
+            3. ПРИЛОЖЕНИЯ: "калькулятор" -> Calculator, "сафари" -> Safari
             
             На команды управления отвечай ТОЛЬКО JSON.
             """
@@ -57,38 +44,37 @@ class Brain:
 
         messages = [self.system_prompt] + self.history + [{'role': 'user', 'content': user_text}]
         
-        try:
-            print(f"--> [Brain] Думаю...")
-            response = ollama.chat(model='llama3.1', messages=messages)
-            content = response['message']['content']
-            
-            # --- Обработка команд ---
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            
-            if json_match:
-                try:
-                    json_str = json_match.group(0)
-                    command_data = json.loads(json_str)
-                    print(f"--> [Brain] Команда: {command_data}")
-                    
-                    self.tool_executor.execute(command_data)
-                    
-                    fast_response = random.choice(self.ack_phrases)
-                    
-                    self.history.append({'role': 'user', 'content': user_text})
-                    self.history.append({'role': 'assistant', 'content': fast_response})
-                    
-                    return fast_response
-                    
-                except Exception as e:
-                    print(f"[Brain Error] {e}")
-                    return "Возникла проблема при выполнении команды, сэр."
-            # ------------------------
-            
-            self.history.append({'role': 'user', 'content': user_text})
-            self.history.append({'role': 'assistant', 'content': content})
-            
-            return content
-            
-        except Exception as e:
-            return f"Сбой систем: {e}"
+        print(f"--> [Brain] Думаю...")
+        
+        # --- ИЗМЕНЕНИЕ ЗДЕСЬ ---
+        # Было: response = ollama.chat(...)
+        # Стало: используем наш провайдер
+        content = self.llm.generate_response(messages)
+        # -----------------------
+        
+        # --- Логика обработки команд осталась прежней ---
+        json_match = re.search(r'\{.*\}', content, re.DOTALL)
+        
+        if json_match:
+            try:
+                json_str = json_match.group(0)
+                command_data = json.loads(json_str)
+                print(f"--> [Brain] Команда: {command_data}")
+                
+                self.tool_executor.execute(command_data)
+                
+                fast_response = random.choice(self.ack_phrases)
+                
+                self.history.append({'role': 'user', 'content': user_text})
+                self.history.append({'role': 'assistant', 'content': fast_response})
+                
+                return fast_response
+                
+            except Exception as e:
+                print(f"[Brain Error] {e}")
+                return "Возникла проблема при выполнении команды, сэр."
+        
+        self.history.append({'role': 'user', 'content': user_text})
+        self.history.append({'role': 'assistant', 'content': content})
+        
+        return content

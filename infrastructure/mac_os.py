@@ -1,47 +1,58 @@
 import subprocess
 
 class MacController:
-    @staticmethod
-    def run(command_data):
-        """Принимает словарь {'tool': ..., 'args': ...}"""
+    def __init__(self):
+        # [COMMAND PATTERN] Реестр команд. 
+        # Добавление новой возможности теперь требует только добавления записи сюда.
+        self._commands = {
+            "open_app": self._open_app_smart,
+            "set_volume": self._set_volume,
+            "open_website": self._open_url
+        }
+
+    def run(self, command_data: dict) -> str:
+        """
+        Находит нужный метод в реестре по ключу 'tool' и запускает его.
+        """
         tool = command_data.get("tool")
         arg = command_data.get("args")
         
-        if tool == "open_app":
-            return MacController._open_app_smart(arg)
+        # Получаем функцию из словаря. Если ключа нет — возвращаем None
+        handler = self._commands.get(tool)
         
-        elif tool == "set_volume":
+        if handler:
             try:
-                subprocess.run(["osascript", "-e", f"set volume output volume {int(arg)}"])
-                return f"Громкость {arg}%"
-            except: return "Ошибка громкости"
+                return handler(arg)
+            except Exception as e:
+                return f"Ошибка при выполнении команды '{tool}': {e}"
             
-        elif tool == "open_website":
-            return MacController._open_url(arg)
-            
-        return "Неизвестная команда"
+        return f"Я пока не умею выполнять команду: {tool}"
 
-    @staticmethod
-    def _open_app_smart(app_name):
+    def _set_volume(self, level):
+        try:
+            vol = int(level)
+            # Ограничиваем громкость от 0 до 100 для безопасности ушей
+            vol = max(0, min(100, vol))
+            subprocess.run(["osascript", "-e", f"set volume output volume {vol}"])
+            return f"Громкость установлена на {vol}%"
+        except ValueError:
+            return "Ошибка: уровень громкости должен быть числом."
+
+    def _open_app_smart(self, app_name):
         print(f"[CMD] Пробую открыть приложение: {app_name}")
         
-        # 1. Пытаемся открыть как приложение
-        # capture_output=True позволяет перехватить текст ошибки, чтобы он не лез в консоль
+        # 1. Пробуем открыть как приложение
         result = subprocess.run(["open", "-a", app_name], capture_output=True, text=True)
         
         if result.returncode == 0:
             return f"Запускаю {app_name}"
         else:
-            # 2. Если приложения нет (код ошибки != 0), пробуем открыть как сайт
-            # Это "Smart Fallback"
-            print(f"[WARN] Приложение не найдено. Пробую как сайт: {app_name}.com")
-            return MacController._open_url(app_name)
+            # 2. Smart Fallback: если приложения нет, пробуем как сайт
+            print(f"[WARN] Приложение не найдено. Пробую открыть как сайт.")
+            return self._open_url(app_name)
 
-    @staticmethod
-    def _open_url(url_fragment):
-        # Если это не полноценная ссылка, делаем её таковой
+    def _open_url(self, url_fragment):
         if not url_fragment.startswith("http"):
-            # Простая эвристика: если нет точек, добавляем .com (для youtube, google и т.д.)
             if "." not in url_fragment:
                 url = f"https://{url_fragment}.com"
             else:
@@ -50,4 +61,4 @@ class MacController:
             url = url_fragment
 
         subprocess.run(["open", url])
-        return f"Открываю сайт {url_fragment}"
+        return f"Открываю {url}"

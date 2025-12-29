@@ -6,6 +6,7 @@ from infrastructure.microphone import MicrophoneService
 from infrastructure.stt import WhisperService
 from infrastructure.tts import SpeakerService
 from infrastructure.mac_os import MacController
+from infrastructure.llm import OllamaService  # <--- Добавлен импорт LLM
 from core.brain import Brain
 from core.interfaces import ToolExecutor
 
@@ -13,17 +14,19 @@ from core.interfaces import ToolExecutor
 STOP_WORDS = ["спасибо", "хватит", "отбой", "конец связи", "пока"]
 
 # --- [ADAPTER PATTERN] ---
-# Адаптер для связи абстрактного "Мозга" с конкретным контроллером macOS.
-# Это позволяет нам менять исполнителя (например, на Windows) без переписывания мозга.
+# Адаптер теперь создает экземпляр контроллера, а не использует статику
 class MacExecutorAdapter(ToolExecutor):
+    def __init__(self):
+        # Композиция: Адаптер "владеет" экземпляром контроллера
+        self.controller = MacController()
+
     def execute(self, command_data: dict) -> str:
-        return MacController.run(command_data)
+        return self.controller.run(command_data)
 # -------------------------
 
 def run_dialogue_session(ear, stt, brain, speaker):
     """
     Внутренний цикл активного диалога.
-    Запускается ПОСЛЕ того, как Джарвис услышал свое имя.
     """
     session_active = True
     last_interaction_time = time.time()
@@ -38,23 +41,21 @@ def run_dialogue_session(ear, stt, brain, speaker):
         if time.time() - last_interaction_time > TIMEOUT_SECONDS:
             print("\n[i] Тайм-аут. Уход в режим ожидания.")
             ear.stop()
-            # Можно добавить звук выключения, если есть (speaker.play_sound('off'))
             session_active = False
             break
 
-        # 2. Запись фразы пользователя
-        audio_file = ear.record_utterance()
+        # 2. Запись фразы пользователя (теперь возвращает массив numpy, а не путь к файлу)
+        audio_data = ear.record_utterance()
         
-        # Если файл слишком маленький (шум < 3kb), игнорируем и сбрасываем цикл
-        if os.path.getsize(audio_file) < 3000:
-            if os.path.exists(audio_file): os.remove(audio_file)
+        # Если массив слишком короткий (шум < 0.5 сек), игнорируем
+        # 16000 семплов * 0.5 сек = 8000
+        if len(audio_data) < 8000:
             continue
 
-        # 3. Распознавание речи (STT)
-        user_text = stt.transcribe(audio_file)
+        # 3. Распознавание речи (STT) - передаем данные напрямую
+        user_text = stt.transcribe(audio_data)
         
-        # Удаляем временный файл
-        if os.path.exists(audio_file): os.remove(audio_file)
+        # (Удаление файла больше не нужно, так как мы работаем в RAM)
 
         # Если ничего внятного не услышал - пропускаем
         if not user_text or len(user_text) < 2:
@@ -71,17 +72,15 @@ def run_dialogue_session(ear, stt, brain, speaker):
             break
 
         # 5. Обработка мозгом (Brain)
-        # Мозг сам решит: выполнить команду или просто ответить.
-        # Если команда выполнена, он вернет фразу типа "Выполняю, сэр".
         response = brain.think(user_text)
 
         # 6. Озвучка ответа (TTS)
-        ear.stop() # Глушим микрофон, чтобы Джарвис не слышал сам себя
+        ear.stop() 
         speaker.speak(response)
         
         # Небольшая пауза, чтобы эхо утихло
         time.sleep(Config.REVERB_TAIL_SECONDS) 
-        ear.start() # Снова включаем слух
+        ear.start() 
 
 def run_app():
     print("--- [INIT] Инициализация модулей... ---")
@@ -96,9 +95,15 @@ def run_app():
         print("2. Whisper (STT) загружен.")
         
         # 3. Сборка Мозга (Dependency Injection)
-        mac_executor = MacExecutorAdapter() # Создаем руки
-        brain = Brain(tool_executor=mac_executor) # Передаем руки в мозг
-        print("3. Мозг готов.")
+        # Создаем сервис LLM
+        llm_service = OllamaService(model_name='llama3.1')
+        
+        # Создаем исполнителя команд
+        mac_executor = MacExecutorAdapter()
+        
+        # Передаем ОБЕ зависимости в мозг: и LLM, и Руки
+        brain = Brain(llm_provider=llm_service, tool_executor=mac_executor) 
+        print("3. Мозг готов (Ollama подключена).")
         
         # 4. Инициализация Динамиков (TTS)
         speaker = SpeakerService()
@@ -106,11 +111,7 @@ def run_app():
 
         print(f"--- ДЖАРВИС: СИСТЕМА АКТИВНА [{Config.DEVICE}] ---")
         
-        # [SOUND] Играем звук запуска (run.wav) вместо речи
-        # Это создает эффект мгновенной готовности
         speaker.play_sound("run")
-        
-        # Очищаем память контекста при старте
         brain.clear_memory()
 
         # Запускаем прослушивание Wake Word
@@ -119,18 +120,11 @@ def run_app():
 
         while True:
             # Слушаем ключевое слово "Джарвис"
-            # ВАЖНО: Здесь НЕТ time.sleep, так как ear.listen_for_wake_word()
-            # работает синхронно с потоком аудио. Добавление sleep приведет к глухоте.
             if ear.listen_for_wake_word():
                 print("\n[!] ДЖАРВИС УСЛЫШАЛ ВАС")
                 
                 ear.stop()
-                
-                # [SOUND] Играем приветствие (greet1.wav и т.д.)
                 speaker.play_sound("greeting")
-                
-                # Короткая пауза (300мс), чтобы звук приветствия успел проиграться 
-                # и не наложился на вашу следующую команду
                 time.sleep(0.3)
                 
                 # Передаем управление в диалоговую сессию
